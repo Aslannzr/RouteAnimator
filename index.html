@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Route Animator</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    
+    <!-- Html2Canvas for Internal Rendering -->
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+    
+    <!-- WebM Muxer (Switched to jsdelivr for better stability) -->
+    <script src="https://cdn.jsdelivr.net/npm/webm-muxer@5.0.2/build/webm-muxer.min.js"></script>
+
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; font-family: 'Inter', sans-serif; }
+        #map { height: 100vh; width: 100vw; z-index: 1; cursor: crosshair; }
+        
+        .ui-panel {
+            z-index: 1000;
+            backdrop-filter: blur(12px);
+            background: rgba(255, 255, 255, 0.95);
+            transition: transform 0.5s ease, opacity 0.5s ease;
+        }
+        
+        /* Render Mode Styles: Hide UI but keep copyright for attribution if needed */
+        .render-mode .ui-panel {
+            transform: translateX(-150%);
+            opacity: 0;
+        }
+        
+        /* Aspect Ratio Masks */
+        .mask-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 900;
+            border: 0px solid rgba(0,0,0,0.8);
+            transition: border-width 0.3s;
+            display: none;
+        }
+        .mask-9-16 { border-left-width: 35vw; border-right-width: 35vw; display: block; }
+
+        /* Car Marker */
+        .car-marker {
+            transition: none; 
+            filter: drop-shadow(0px 8px 15px rgba(0,0,0,0.3));
+            z-index: 2000 !important;
+            pointer-events: none; 
+        }
+
+        .car-inner {
+            transform-origin: center center;
+            width: 100%;
+            height: 100%;
+            display: block;
+            will-change: transform; 
+        }
+
+        /* Waypoint Marker */
+        .waypoint-marker {
+            z-index: 1500 !important;
+            filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.2));
+            transition: transform 0.1s;
+        }
+        .waypoint-marker:hover {
+            transform: scale(1.1);
+        }
+
+        /* Animations */
+        @keyframes slideIn { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .status-show { display: block; animation: slideIn 0.2s ease-out; }
+
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top: 3px solid white;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .panel-scroll {
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+        .panel-scroll::-webkit-scrollbar { width: 4px; }
+        .panel-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+        
+        .rec-pulse { animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red {
+            0% { background-color: #ef4444; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { background-color: #dc2626; box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+            100% { background-color: #ef4444; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        /* Modal */
+        .glass-modal {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        }
+        
+        .social-btn { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+        .social-btn:hover { transform: translateY(-2px); filter: brightness(1.1); }
+        .social-btn:active { transform: scale(0.95); }
+
+        /* Leaflet Tweaks */
+        .leaflet-popup-content-wrapper { border-radius: 12px; padding: 0; overflow: hidden; }
+        .leaflet-popup-content { margin: 0; width: 200px !important; }
+        .vehicle-popup-btn { cursor: pointer; transition: background 0.2s; }
+        .vehicle-popup-btn:hover { background-color: #f3f4f6; }
+        .vehicle-popup-btn.active { background-color: #eff6ff; border-color: #3b82f6; color: #1d4ed8; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div id="map"></div>
+    <div id="aspect-mask" class="mask-overlay"></div>
+
+    <!-- Hidden Canvas for Internal Rendering -->
+    <canvas id="render-canvas" class="hidden"></canvas>
+
+    <!-- Main UI Panel -->
+    <div id="ui-container" class="fixed top-4 left-4 w-96 max-w-[90vw] ui-panel rounded-2xl shadow-2xl border border-white/50 p-6 flex flex-col gap-4 panel-scroll">
+        
+        <div class="flex items-center gap-3 mb-2">
+            <div class="bg-blue-600 text-white p-2 rounded-lg shadow-lg shadow-blue-500/30">
+                <i class="ph ph-map-trifold text-xl"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-lg leading-tight">Route Animator</h1>
+                <p class="text-xs text-gray-500">Create beautiful map videos</p>
+            </div>
+        </div>
+
+        <!-- Inputs -->
+        <div class="space-y-3">
+            <div class="relative group">
+                <div class="absolute left-3 top-1/2 -translate-y-1/2 text-green-600">
+                    <i class="ph ph-map-pin-line text-lg"></i>
+                </div>
+                <input type="text" id="start-input" placeholder="Start (Click map)" 
+                    class="w-full pl-10 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-sm">
+                <button onclick="locateUser()" class="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-200 rounded-md text-gray-500" title="My Location">
+                    <i class="ph ph-crosshair"></i>
+                </button>
+            </div>
+
+            <div class="relative">
+                <div class="absolute left-3 top-1/2 -translate-y-1/2 text-red-500">
+                    <i class="ph ph-flag-checkered text-lg"></i>
+                </div>
+                <input type="text" id="end-input" placeholder="Destination (Click map)" 
+                    class="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-sm">
+            </div>
+        </div>
+
+        <!-- Map Style -->
+        <div>
+            <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">Map Style</label>
+            <div class="relative">
+                <div class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+                    <i class="ph ph-globe text-lg"></i>
+                </div>
+                <select id="map-style" onchange="changeMapStyle(this.value)" class="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 block appearance-none cursor-pointer">
+                    <option value="standard">Standard</option>
+                    <option value="satellite">Satellite</option>
+                    <option value="dark">Dark Mode</option>
+                    <option value="light">Light Mode</option>
+                </select>
+                <div class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">
+                    <i class="ph ph-caret-down"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Vehicle Selection -->
+        <div>
+            <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">Starting Vehicle</label>
+            <div class="grid grid-cols-3 gap-2">
+                <button onclick="selectVehicle('sport')" id="btn-sport" class="vehicle-btn active-vehicle flex flex-col items-center gap-1 p-2 rounded-xl border border-blue-500 bg-blue-50 transition-all">
+                    <i class="ph ph-car-profile text-xl text-blue-600"></i>
+                    <span class="text-[10px] font-medium text-blue-700">Sport</span>
+                </button>
+                <button onclick="selectVehicle('sedan')" id="btn-sedan" class="vehicle-btn flex flex-col items-center gap-1 p-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-all">
+                    <i class="ph ph-taxi text-xl text-gray-600"></i>
+                    <span class="text-[10px] font-medium text-gray-600">Sedan</span>
+                </button>
+                <button onclick="selectVehicle('truck')" id="btn-truck" class="vehicle-btn flex flex-col items-center gap-1 p-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-all">
+                    <i class="ph ph-truck text-xl text-gray-600"></i>
+                    <span class="text-[10px] font-medium text-gray-600">Truck</span>
+                </button>
+                <button onclick="selectVehicle('police')" id="btn-police" class="vehicle-btn flex flex-col items-center gap-1 p-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-all">
+                    <i class="ph ph-siren text-xl text-gray-600"></i>
+                    <span class="text-[10px] font-medium text-gray-600">Police</span>
+                </button>
+                <button onclick="selectVehicle('bus')" id="btn-bus" class="vehicle-btn flex flex-col items-center gap-1 p-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-all">
+                    <i class="ph ph-bus text-xl text-gray-600"></i>
+                    <span class="text-[10px] font-medium text-gray-600">Bus</span>
+                </button>
+                <button onclick="selectVehicle('f1')" id="btn-f1" class="vehicle-btn flex flex-col items-center gap-1 p-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-all">
+                    <i class="ph ph-trophy text-xl text-gray-600"></i>
+                    <span class="text-[10px] font-medium text-gray-600">F1</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Travel Info & Height Profile -->
+        <div class="bg-white p-3 rounded-xl border border-gray-200 shadow-sm space-y-3">
+            <div class="flex justify-between items-center text-xs border-b border-gray-100 pb-2">
+                <div class="flex flex-col">
+                    <span class="text-gray-400 font-semibold uppercase tracking-wider">Distance</span>
+                    <span id="stat-distance" class="font-bold text-gray-800 text-sm">-- km</span>
+                </div>
+                <div class="flex flex-col text-right">
+                    <span class="text-gray-400 font-semibold uppercase tracking-wider">Est. Time</span>
+                    <span id="stat-time" class="font-bold text-gray-800 text-sm">-- min</span>
+                </div>
+            </div>
+            
+            <div>
+                <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">Elevation Profile</label>
+                <div class="h-20 w-full bg-gray-50 rounded-lg border border-gray-100 relative overflow-hidden flex items-end">
+                    <canvas id="elevation-chart" class="w-full h-full z-10 relative"></canvas>
+                    <!-- Fallback / Loading Text -->
+                    <div id="elevation-status" class="absolute inset-0 flex items-center justify-center text-[10px] text-gray-400 z-0">
+                        No Data
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Duration & Export Settings -->
+        <div class="bg-blue-50 p-3 rounded-xl border border-blue-100">
+            <div class="flex justify-between items-center mb-2">
+                <label class="text-xs font-bold text-blue-800 uppercase tracking-wider">Video Duration</label>
+                <span class="text-xs font-mono bg-blue-200 text-blue-800 px-2 py-0.5 rounded">Seconds</span>
+            </div>
+            <div class="flex items-center gap-2 mb-2">
+                <input type="number" id="duration-input" value="15" min="5" max="600" class="w-full bg-white border border-gray-300 text-gray-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-bold text-center shadow-inner" placeholder="30">
+            </div>
+            
+            <div class="flex justify-between items-center mb-1">
+                <label class="text-xs font-bold text-blue-800 uppercase tracking-wider">Aspect Ratio</label>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <button onclick="setAspectRatio('16:9')" id="ratio-16-9" class="text-xs py-1 px-2 rounded bg-blue-600 text-white border border-blue-600">Landscape (16:9)</button>
+                <button onclick="setAspectRatio('9:16')" id="ratio-9-16" class="text-xs py-1 px-2 rounded bg-white text-blue-600 border border-blue-200">Story (9:16)</button>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="grid grid-cols-1 gap-2">
+            <button id="main-btn" onclick="togglePlay()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl shadow-lg shadow-blue-500/30 transition-all flex justify-center items-center gap-2 transform active:scale-95">
+                <span id="btn-icon"><i class="ph ph-path text-xl"></i></span>
+                <span id="btn-text">Plan Route</span>
+                <div id="btn-loader" class="spinner hidden"></div>
+            </button>
+
+            <!-- Render Button -->
+            <div class="grid grid-cols-1 gap-2">
+                <button id="btn-record" onclick="startRendering()" class="w-full bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold py-3 rounded-xl shadow-md transition-all text-sm flex items-center justify-center gap-2">
+                    <i class="ph ph-film-strip text-xl"></i> <span id="render-text">Render Video</span>
+                </button>
+            </div>
+            
+            <!-- Export Options -->
+            <div class="grid grid-cols-2 gap-2">
+                <button onclick="toggleExportMenu()" class="w-full bg-white hover:bg-gray-50 text-gray-600 font-medium py-2 rounded-xl border border-gray-200 transition-all text-xs flex items-center justify-center gap-1 relative">
+                    <i class="ph ph-download-simple"></i> Save Data
+                    
+                    <div id="export-menu" class="hidden absolute bottom-full mb-2 left-0 w-full bg-white rounded-xl shadow-xl border border-gray-100 overflow-hidden flex-col z-50">
+                        <div onclick="exportData('gpx')" class="px-4 py-2 hover:bg-gray-50 text-left text-gray-700 cursor-pointer">Download GPX</div>
+                        <div onclick="exportData('kml')" class="px-4 py-2 hover:bg-gray-50 text-left text-gray-700 cursor-pointer">Download KML</div>
+                        <div onclick="exportData('json')" class="px-4 py-2 hover:bg-gray-50 text-left text-gray-700 cursor-pointer">Download JSON</div>
+                    </div>
+                </button>
+                <button onclick="resetMap()" class="w-full bg-gray-50 hover:bg-gray-100 text-gray-500 font-medium py-2 rounded-xl border border-transparent hover:border-gray-200 transition-all text-xs">
+                    Reset Map
+                </button>
+            </div>
+        </div>
+
+        <!-- Status -->
+        <div id="status-msg" class="hidden p-3 bg-blue-50 text-blue-700 text-xs font-medium rounded-lg border border-blue-200 shadow-sm"></div>
+    </div>
+
+    <!-- Rendering Overlay -->
+    <div id="render-overlay" class="fixed inset-0 bg-black/90 z-[3000] hidden flex flex-col items-center justify-center text-white">
+        <div class="w-64 mb-4">
+            <div class="flex justify-between text-xs font-bold mb-1">
+                <span>RENDERING VIDEO</span>
+                <span id="render-pct">0%</span>
+            </div>
+            <div class="w-full bg-gray-700 rounded-full h-2.5">
+                <div id="render-bar" class="bg-blue-500 h-2.5 rounded-full" style="width: 0%"></div>
+            </div>
+        </div>
+        <p class="text-sm text-gray-400 animate-pulse">Generating frames... Please wait.</p>
+        <p class="text-xs text-gray-600 mt-4">Do not switch tabs.</p>
+        <button onclick="cancelRendering()" class="mt-8 text-red-400 hover:text-red-300 text-sm underline">Cancel</button>
+    </div>
+
+    <!-- Post-Recording Studio -->
+    <div id="preview-modal" class="fixed inset-0 z-[4000] bg-black/80 flex items-center justify-center hidden backdrop-blur-md transition-opacity duration-300">
+        <div class="glass-modal rounded-3xl p-1 w-full max-w-lg mx-4 transform scale-100 transition-all duration-300 shadow-2xl border border-white/40">
+            <div class="bg-white/50 rounded-[20px] p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-rose-500 to-purple-600">Capture Ready</h3>
+                    <button onclick="closePreview()" class="text-gray-400 hover:text-gray-700 bg-white p-2 rounded-full shadow-sm"><i class="ph-bold ph-x text-lg"></i></button>
+                </div>
+                <div class="relative group rounded-xl overflow-hidden shadow-lg mb-5 border border-gray-100 bg-black">
+                    <video id="preview-video" class="w-full aspect-video object-cover" controls playsinline loop></video>
+                </div>
+                <div class="grid grid-cols-2 gap-3 mb-2" id="action-grid">
+                    <button onclick="downloadRecording()" class="col-span-2 bg-gray-900 hover:bg-black text-white font-bold py-3.5 rounded-xl transition-all flex justify-center items-center gap-2 shadow-lg shadow-gray-500/20 active:scale-[0.98]">
+                        <i class="ph-bold ph-download-simple"></i> Download
+                    </button>
+                    <button onclick="simulateUpload('instagram')" class="social-btn bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-600 text-white font-bold py-3 rounded-xl flex flex-col items-center justify-center gap-1 shadow-md">
+                        <i class="ph-bold ph-instagram-logo text-xl"></i><span class="text-[10px]">Stories</span>
+                    </button>
+                    <button onclick="simulateUpload('tiktok')" class="social-btn bg-black text-white font-bold py-3 rounded-xl flex flex-col items-center justify-center gap-1 shadow-md relative overflow-hidden">
+                        <div class="absolute inset-0 bg-gradient-to-r from-[#00f2ea] to-[#ff0050] opacity-20"></div>
+                        <i class="ph-bold ph-tiktok-logo text-xl z-10"></i><span class="text-[10px] z-10">TikTok</span>
+                    </button>
+                </div>
+                <div id="upload-success" class="hidden flex flex-col items-center justify-center py-6 text-center animate-fade-in">
+                    <div class="checkmark-circle">
+                        <div class="background"></div>
+                        <div class="checkmark draw"></div>
+                    </div>
+                    <h4 class="mt-4 text-lg font-bold text-gray-800">Shared Successfully!</h4>
+                    <p class="text-xs text-gray-500 mt-1">Your journey is now live.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Assets ---
+        const carIcons = {
+            sport: `<svg viewBox="0 0 100 200" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg"><g><path d="M15,40 Q15,10 50,10 Q85,10 85,40 L85,160 Q85,190 50,190 Q15,190 15,160 Z" fill="#EF4444" stroke="#991B1B" stroke-width="2"/><path d="M20,50 L80,50 L75,80 L25,80 Z" fill="#333" opacity="0.9"/><path d="M25,120 L75,120 L80,140 L20,140 Z" fill="#333" opacity="0.9"/><rect x="10" y="160" width="10" height="6" fill="#FCA5A5"/><rect x="80" y="160" width="10" height="6" fill="#FCA5A5"/><path d="M30,10 L70,10 L70,30 L30,30 Z" fill="#B91C1C"/></g></svg>`,
+            sedan: `<svg viewBox="0 0 100 200" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg"><g><rect x="15" y="10" width="70" height="180" rx="10" fill="#3B82F6" stroke="#1E40AF" stroke-width="2"/><path d="M20,45 L80,45 L78,80 L22,80 Z" fill="#1E293B"/><rect x="20" y="130" width="60" height="25" rx="5" fill="#1E293B"/><rect x="15" y="170" width="15" height="8" fill="#EF4444"/><rect x="70" y="170" width="15" height="8" fill="#EF4444"/></g></svg>`,
+            truck: `<svg viewBox="0 0 100 220" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg"><g><rect x="10" y="10" width="80" height="60" rx="5" fill="#F59E0B" stroke="#B45309" stroke-width="2"/><rect x="15" y="20" width="70" height="25" rx="2" fill="#4B5563"/><rect x="5" y="80" width="90" height="130" rx="2" fill="#E5E7EB" stroke="#9CA3AF" stroke-width="2"/><line x1="50" y1="80" x2="50" y2="210" stroke="#D1D5DB" stroke-width="2" stroke-dasharray="10,5"/></g></svg>`,
+            police: `<svg viewBox="0 0 100 200" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg"><g><rect x="15" y="10" width="70" height="180" rx="10" fill="#111827" stroke="#374151" stroke-width="2"/><rect x="15" y="50" width="70" height="90" fill="#FFFFFF"/><path d="M20,45 L80,45 L78,80 L22,80 Z" fill="#111827"/><rect x="20" y="130" width="60" height="25" rx="5" fill="#111827"/><rect x="30" y="70" width="40" height="6" rx="2" fill="#2563EB"/><rect x="30" y="70" width="20" height="6" rx="2" fill="#EF4444"/><text x="50" y="110" font-family="sans-serif" font-size="12" text-anchor="middle" fill="#000" font-weight="bold">POLICE</text></g></svg>`,
+            bus: `<svg viewBox="0 0 100 260" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg"><g><rect x="10" y="5" width="80" height="250" rx="8" fill="#FCD34D" stroke="#D97706" stroke-width="2"/><rect x="15" y="15" width="70" height="30" rx="2" fill="#4B5563"/><rect x="15" y="220" width="70" height="20" rx="2" fill="#4B5563"/><line x1="10" y1="60" x2="90" y2="60" stroke="#D97706" stroke-width="1"/><line x1="10" y1="100" x2="90" y2="100" stroke="#D97706" stroke-width="1"/><line x1="10" y1="140" x2="90" y2="140" stroke="#D97706" stroke-width="1"/><line x1="10" y1="180" x2="90" y2="180" stroke="#D97706" stroke-width="1"/></g></svg>`,
+            f1: `<svg viewBox="0 0 100 220" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg"><g><path d="M45,10 L55,10 L60,40 L40,40 Z" fill="#DC2626"/><rect x="35" y="40" width="30" height="80" fill="#DC2626"/><rect x="10" y="160" width="80" height="30" fill="#DC2626"/><rect x="5" y="40" width="20" height="40" rx="5" fill="#1F2937"/><rect x="75" y="40" width="20" height="40" rx="5" fill="#1F2937"/><rect x="5" y="150" width="25" height="50" rx="5" fill="#1F2937"/><rect x="70" y="150" width="25" height="50" rx="5" fill="#1F2937"/><circle cx="50" cy="90" r="8" fill="#FCD34D"/></g></svg>`
+        };
+
+        const vehicleIconMap = { sport: 'car-profile', sedan: 'taxi', truck: 'truck', police: 'siren', bus: 'bus', f1: 'trophy' };
+
+        const tileLayers = {
+            standard: { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', attr: '&copy; OSM' },
+            satellite: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr: '&copy; Esri' },
+            dark: { url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attr: '&copy; CartoDB' },
+            light: { url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', attr: '&copy; CartoDB' }
+        };
+
+        // --- 2. State ---
+        let map, startMarker, endMarker, routePolyline, carMarker, currentTileLayer;
+        let startCoords = null;
+        let endCoords = null;
+        let intermediateWaypoints = []; 
+        let selectedVehicle = 'sport';
+        let animationFrameId;
+        let drivenPolyline; 
+        
+        let isPlaying = false;
+        let hasRoute = false;
+        let pathData = []; 
+        let totalDistance = 0; 
+        let legBoundaries = []; 
+        
+        let animState = { index: 0, metersOnSegment: 0, lastTime: 0, currentRotation: 0, accumulatedDistance: 0 };
+
+        // Rendering State
+        let isRendering = false;
+        let renderCanvas, renderCtx, renderStream, mediaRecorder;
+        let recordedChunks = [];
+        let currentRecordingBlob = null;
+        let muxer = null, videoEncoder = null;
+
+        function initMap() {
+            map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([51.505, -0.09], 13);
+            changeMapStyle('standard'); 
+            L.control.zoom({ position: 'bottomright' }).addTo(map);
+            map.on('click', (e) => handleMapClick(e.latlng));
+        }
+
+        function changeMapStyle(style) {
+            if (currentTileLayer) map.removeLayer(currentTileLayer);
+            currentTileLayer = L.tileLayer(tileLayers[style].url, {
+                attribution: tileLayers[style].attr,
+                maxZoom: 19,
+                crossOrigin: 'anonymous' // FIXED: Use anonymous string, not boolean
+            }).addTo(map);
+        }
+
+        function setAspectRatio(ratio) {
+            const mask = document.getElementById('aspect-mask');
+            const btn169 = document.getElementById('ratio-16-9');
+            const btn916 = document.getElementById('ratio-9-16');
+            
+            if(ratio === '16:9') {
+                mask.classList.remove('mask-9-16');
+                btn169.className = "text-xs py-1 px-2 rounded bg-blue-600 text-white border border-blue-600";
+                btn916.className = "text-xs py-1 px-2 rounded bg-white text-blue-600 border border-blue-200";
+            } else {
+                mask.classList.add('mask-9-16');
+                btn916.className = "text-xs py-1 px-2 rounded bg-blue-600 text-white border border-blue-600";
+                btn169.className = "text-xs py-1 px-2 rounded bg-white text-blue-600 border border-blue-200";
+            }
+
+            // Re-fit bounds immediately so user sees the change
+            if (hasRoute && routePolyline) {
+                 map.fitBounds(routePolyline.getBounds(), { padding: getBoundsPadding() });
+            }
+        }
+
+        function getBoundsPadding() {
+            const isStory = document.getElementById('aspect-mask').classList.contains('mask-9-16');
+            const x = isStory ? window.innerWidth * 0.36 : 50; // 36% to be safe (mask is 35%)
+            return [x, 50];
+        }
+
+        // --- 3. Interaction ---
+        function handleMapClick(latlng) {
+            if (hasRoute && (isPlaying || isRendering)) return; 
+            if (!startCoords) setStartPoint(latlng);
+            else if (!endCoords) setEndPoint(latlng);
+            else { resetMap(); setStartPoint(latlng); }
+        }
+
+        function setStartPoint(latlng) {
+            startCoords = latlng;
+            document.getElementById('start-input').value = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
+            if (startMarker) map.removeLayer(startMarker);
+            startMarker = createMarker(latlng, 'green', 'ph-map-pin');
+            bindVehiclePopup(startMarker, 'start');
+        }
+
+        function setEndPoint(latlng) {
+            endCoords = latlng;
+            document.getElementById('end-input').value = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
+            if (endMarker) map.removeLayer(endMarker);
+            endMarker = createMarker(latlng, 'red', 'ph-flag-checkered');
+            if(startCoords) map.fitBounds([startCoords, endCoords], { padding: [100, 100] });
+        }
+
+        function createMarker(latlng, color, iconClass) {
+            const icon = L.divIcon({
+                className: 'bg-transparent',
+                html: `<div class="w-8 h-8 bg-${color}-500 rounded-full border-4 border-white shadow-xl flex items-center justify-center text-white transform -translate-x-1/2 -translate-y-1/2"><i class="ph-bold ${iconClass}"></i></div>`
+            });
+            return L.marker(latlng, {icon: icon}).addTo(map);
+        }
+
+        function createWaypointMarker(latlng) {
+            const icon = L.divIcon({
+                className: 'bg-transparent waypoint-marker',
+                html: `<div class="w-6 h-6 bg-blue-500 rounded-full border-2 border-white shadow-md flex items-center justify-center text-white transform -translate-x-1/2 -translate-y-1/2"><i class="ph-bold ph-arrows-out-cardinal text-xs"></i></div>`
+            });
+            const marker = L.marker(latlng, {icon: icon, draggable: true}).addTo(map);
+            marker.on('dragend', async function(e) {
+                const newPos = e.target.getLatLng();
+                const wpObj = intermediateWaypoints.find(w => w.marker === marker);
+                if(wpObj) { wpObj.latlng = newPos; stopAnimation(); await calculateRoute(); }
+            });
+            marker.on('contextmenu', async function(e) {
+                map.removeLayer(marker);
+                intermediateWaypoints = intermediateWaypoints.filter(w => w.marker !== marker);
+                stopAnimation();
+                await calculateRoute();
+            });
+            bindVehiclePopup(marker, 'waypoint');
+            return marker;
+        }
+
+        function bindVehiclePopup(marker, type) {
+            const vehicleTypes = ['sport', 'sedan', 'truck', 'police', 'bus', 'f1'];
+            let html = `<div class="bg-white p-2">
+                <p class="text-xs font-bold text-gray-500 mb-2 uppercase text-center">Change Vehicle</p>
+                <div class="grid grid-cols-3 gap-1">`;
+            vehicleTypes.forEach(v => {
+                const icon = vehicleIconMap[v];
+                html += `<div onclick="setSegmentVehicle('${type}', ${marker._leaflet_id}, '${v}')" class="vehicle-popup-btn flex flex-col items-center p-1 rounded border border-gray-100"><i class="ph-fill ph-${icon} text-lg text-gray-600"></i></div>`;
+            });
+            html += `</div></div>`;
+            marker.bindPopup(html, { closeButton: false, offset: [0, -10] });
+        }
+
+        window.setSegmentVehicle = function(type, markerId, vehicle) {
+            map.closePopup();
+            if (type === 'start') { selectVehicle(vehicle); }
+            else {
+                const wp = intermediateWaypoints.find(w => w.marker._leaflet_id === markerId);
+                if (wp) wp.vehicle = vehicle;
+            }
+        };
+
+        function resetMap() {
+            stopAnimation();
+            hasRoute = false;
+            pathData = [];
+            totalDistance = 0;
+            animState = { index: 0, metersOnSegment: 0, lastTime: 0, currentRotation: 0, accumulatedDistance: 0 };
+            
+            if (startMarker) map.removeLayer(startMarker);
+            if (endMarker) map.removeLayer(endMarker);
+            if (routePolyline) map.removeLayer(routePolyline);
+            if (carMarker) map.removeLayer(carMarker);
+            if (drivenPolyline) map.removeLayer(drivenPolyline);
+            
+            intermediateWaypoints.forEach(wp => map.removeLayer(wp.marker));
+            intermediateWaypoints = [];
+            
+            startCoords = null; endCoords = null;
+            document.getElementById('start-input').value = '';
+            document.getElementById('end-input').value = '';
+            document.getElementById('stat-distance').innerText = '-- km';
+            document.getElementById('stat-time').innerText = '-- min';
+            clearElevationChart();
+            
+            updateMainButton('plan');
+            hideStatus();
+        }
+
+        // --- 4. Logic ---
+
+        async function togglePlay() {
+            if (isPlaying) { isPlaying = false; cancelAnimationFrame(animationFrameId); updateMainButton('resume'); return; }
+            if (hasRoute && pathData.length > 0) {
+                isPlaying = true;
+                animState.lastTime = performance.now();
+                updateMainButton('pause');
+                requestAnimationFrame(animationLoop);
+                return;
+            }
+            await calculateRoute();
+        }
+
+        async function calculateRoute() {
+            setLoading(true);
+            try {
+                if (!startCoords && document.getElementById('start-input').value) await geocode('start');
+                if (!endCoords && document.getElementById('end-input').value) await geocode('end');
+                if (!startCoords || !endCoords) throw new Error("Select Start and Destination.");
+
+                showStatus("Calculating route...", "blue");
+                const points = [startCoords, ...intermediateWaypoints.map(w => w.latlng), endCoords];
+                const coordString = points.map(p => `${p.lng},${p.lat}`).join(';');
+                const url = `https://router.project-osrm.org/route/v1/driving/${coordString}?overview=full&geometries=geojson`;
+                const response = await fetch(url).catch(() => { throw new Error("Network error."); });
+                const data = await response.json();
+                if (data.code !== 'Ok' || !data.routes || !data.routes[0]) throw new Error("No route found.");
+
+                const route = data.routes[0];
+                pathData = route.geometry.coordinates.map(c => L.latLng(c[1], c[0]));
+                if (pathData.length < 2) throw new Error("Route too short.");
+
+                legBoundaries = [];
+                let accumDist = 0;
+                route.legs.forEach(leg => { accumDist += leg.distance; legBoundaries.push(accumDist); });
+
+                totalDistance = route.distance;
+                document.getElementById('stat-distance').innerText = (totalDistance / 1000).toFixed(2) + ' km';
+                const totalDuration = route.duration;
+                const hrs = Math.floor(totalDuration / 3600);
+                const mins = Math.round((totalDuration % 3600) / 60);
+                document.getElementById('stat-time').innerText = (hrs > 0 ? `${hrs}h ` : "") + `${mins}m`;
+
+                if (routePolyline) map.removeLayer(routePolyline);
+                routePolyline = L.polyline(pathData, { color: '#94a3b8', weight: 6, opacity: 0.5, lineJoin: 'round' }).addTo(map);
+
+                if (drivenPolyline) map.removeLayer(drivenPolyline);
+                drivenPolyline = L.polyline([], { color: '#06b6d4', weight: 8, opacity: 1, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+
+                routePolyline.on('click', async function(e) { L.DomEvent.stop(e); await handlePolylineClick(e.latlng); });
+                
+                // Dynamic Padding for Story Mode
+                map.fitBounds(routePolyline.getBounds(), { padding: getBoundsPadding() });
+
+                fetchElevationProfile(pathData);
+
+                hasRoute = true; isPlaying = false;
+                animState = { index: 0, metersOnSegment: 0, lastTime: performance.now(), currentRotation: 0, accumulatedDistance: 0 };
+                
+                setupCarMarker();
+                updateCarIcon(selectedVehicle);
+                carMarker.setLatLng(pathData[0]);
+                carMarker.addTo(map);
+
+                updateMainButton('start');
+                hideStatus();
+            } catch (err) {
+                updateMainButton('plan');
+                showStatus(err.message, "red");
+                console.error(err);
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        // --- Elevation Logic ---
+        async function fetchElevationProfile(path) {
+            const statusEl = document.getElementById('elevation-status');
+            const canvas = document.getElementById('elevation-chart');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            statusEl.innerText = "Loading elevation...";
+            statusEl.classList.remove('hidden');
+
+            const samples = 50;
+            const step = Math.max(1, Math.floor(path.length / samples));
+            const locations = [];
+            for(let i = 0; i < path.length; i += step) locations.push({ latitude: path[i].lat, longitude: path[i].lng });
+            if(path.length > 0) locations.push({ latitude: path[path.length-1].lat, longitude: path[path.length-1].lng });
+
+            try {
+                const response = await fetch('https://api.open-elevation.com/api/v1/lookup', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locations: locations })
+                });
+                if (!response.ok) throw new Error("Elevation service busy");
+                const data = await response.json();
+                drawElevationChart(data.results.map(r => r.elevation));
+                statusEl.classList.add('hidden');
+            } catch (e) {
+                console.warn("Elevation error:", e);
+                statusEl.innerText = "Elevation data unavailable";
+            }
+        }
+
+        function drawElevationChart(dataPoints) {
+            const canvas = document.getElementById('elevation-chart');
+            const ctx = canvas.getContext('2d');
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+            const width = rect.width, height = rect.height;
+            const minH = Math.min(...dataPoints), maxH = Math.max(...dataPoints), range = maxH - minH || 1;
+
+            ctx.clearRect(0, 0, width, height);
+            ctx.beginPath(); ctx.moveTo(0, height);
+            const stepX = width / (dataPoints.length - 1);
+            dataPoints.forEach((h, i) => {
+                const y = height - ((h - minH) / range * (height * 0.8)) - (height * 0.1);
+                ctx.lineTo(i * stepX, y);
+            });
+            ctx.lineTo(width, height); ctx.closePath();
+            const grad = ctx.createLinearGradient(0, 0, 0, height);
+            grad.addColorStop(0, 'rgba(59, 130, 246, 0.5)'); grad.addColorStop(1, 'rgba(59, 130, 246, 0.05)');
+            ctx.fillStyle = grad; ctx.fill();
+            ctx.beginPath();
+            dataPoints.forEach((h, i) => {
+                const y = height - ((h - minH) / range * (height * 0.8)) - (height * 0.1);
+                i===0 ? ctx.moveTo(i * stepX, y) : ctx.lineTo(i * stepX, y);
+            });
+            ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 2; ctx.stroke();
+        }
+
+        function clearElevationChart() {
+            const canvas = document.getElementById('elevation-chart');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            document.getElementById('elevation-status').innerText = "No Data";
+            document.getElementById('elevation-status').classList.remove('hidden');
+        }
+
+        async function handlePolylineClick(clickedPoint) {
+            let closestIdx = 0, minDistance = Infinity;
+            for(let i=0; i<pathData.length; i++) {
+                const d = map.distance(clickedPoint, pathData[i]);
+                if(d < minDistance) { minDistance = d; closestIdx = i; }
+            }
+            const newWpMarker = createWaypointMarker(clickedPoint);
+            const newWp = { latlng: clickedPoint, marker: newWpMarker, pathIndex: closestIdx, vehicle: selectedVehicle };
+            
+            for(let wp of intermediateWaypoints) {
+                let localMin = Infinity, localIdx = 0;
+                for(let i=0; i<pathData.length; i++) {
+                    const d = map.distance(wp.latlng, pathData[i]);
+                    if(d < localMin) { localMin = d; localIdx = i; }
+                }
+                wp.pathIndex = localIdx;
+            }
+            let insertAt = intermediateWaypoints.length;
+            for(let i=0; i<intermediateWaypoints.length; i++) {
+                if(intermediateWaypoints[i].pathIndex > closestIdx) { insertAt = i; break; }
+            }
+            intermediateWaypoints.splice(insertAt, 0, newWp);
+            stopAnimation();
+            showStatus("Waypoint added.", "blue");
+            await calculateRoute();
+        }
+
+        function setupCarMarker() {
+            if (carMarker) map.removeLayer(carMarker);
+            const carIcon = L.divIcon({ className: 'car-marker', html: `<div class="car-inner"></div>`, iconSize: [20, 40], iconAnchor: [10, 20] });
+            if (pathData && pathData.length > 0) carMarker = L.marker(pathData[0], {icon: carIcon}).addTo(map);
+        }
+        
+        function updateCarIcon(vehicleType) {
+            if(!carMarker) return;
+            let size = [20, 40];
+            if (vehicleType === 'truck') size = [22, 50]; else if (vehicleType === 'bus') size = [22, 55]; else if (vehicleType === 'f1') size = [21, 45];
+            const newIcon = L.divIcon({
+                className: 'car-marker',
+                html: `<div class="car-inner" style="transform: rotate(${animState.currentRotation}deg)">${carIcons[vehicleType]}</div>`,
+                iconSize: size, iconAnchor: [size[0]/2, size[1]/2]
+            });
+            carMarker.setIcon(newIcon);
+        }
+
+        function animationLoop(time) {
+            if (!isPlaying) return;
+            let deltaTime = (time - animState.lastTime) / 1000;
+            if (deltaTime > 0.1) deltaTime = 0.1; 
+            animState.lastTime = time;
+
+            const durationSec = parseFloat(document.getElementById('duration-input').value) || 30;
+            const speedMs = totalDistance / durationSec;
+            let moveDistance = speedMs * deltaTime;
+            let finalPos = null, targetAngle = animState.currentRotation;
+
+            while (moveDistance > 0 && animState.index < pathData.length - 1) {
+                const p1 = pathData[animState.index];
+                const p2 = pathData[animState.index + 1];
+                const segmentLength = map.distance(p1, p2);
+                
+                if (segmentLength < 0.05) { animState.index++; continue; }
+                const remaining = segmentLength - animState.metersOnSegment;
+                
+                if (moveDistance <= remaining) {
+                    animState.metersOnSegment += moveDistance;
+                    animState.accumulatedDistance += moveDistance;
+                    moveDistance = 0; 
+                    const ratio = animState.metersOnSegment / segmentLength;
+                    if (!isNaN(ratio)) {
+                        finalPos = L.latLng(p1.lat + (p2.lat - p1.lat) * ratio, p1.lng + (p2.lng - p1.lng) * ratio);
+                        targetAngle = calculateBearing(p1.lat, p1.lng, p2.lat, p2.lng);
+                    }
+                } else {
+                    moveDistance -= remaining;
+                    animState.accumulatedDistance += remaining;
+                    animState.metersOnSegment = 0;
+                    animState.index++;
+                }
+            }
+            
+            if (finalPos) {
+                 carMarker.setLatLng(finalPos);
+                 const drivenPoints = pathData.slice(0, animState.index + 1);
+                 drivenPoints.push(finalPos);
+                 if(drivenPolyline) drivenPolyline.setLatLngs(drivenPoints);
+
+                 if (animState.index === 0 && animState.metersOnSegment < (totalDistance * 0.01)) animState.currentRotation = targetAngle;
+                 else animState.currentRotation = lerpAngle(animState.currentRotation, targetAngle, Math.min(1, 10 * deltaTime));
+
+                 let currentLegIndex = 0;
+                 for(let i=0; i<legBoundaries.length; i++) {
+                     if (animState.accumulatedDistance <= legBoundaries[i]) { currentLegIndex = i; break; }
+                     if (i === legBoundaries.length - 1) currentLegIndex = i;
+                 }
+                 let legVehicle = selectedVehicle;
+                 if (currentLegIndex > 0 && intermediateWaypoints[currentLegIndex - 1]) {
+                     legVehicle = intermediateWaypoints[currentLegIndex - 1].vehicle || selectedVehicle;
+                 }
+                 if (carMarker._currentVehicle !== legVehicle) {
+                     updateCarIcon(legVehicle);
+                     carMarker._currentVehicle = legVehicle;
+                 }
+
+                 const el = carMarker.getElement();
+                 if (el) el.querySelector('.car-inner').style.transform = `rotate(${animState.currentRotation}deg)`;
+                 if (!map.getBounds().contains(finalPos)) map.panTo(finalPos, {animate: true});
+            } else if (animState.index >= pathData.length - 1) {
+                finishAnimation();
+                return;
+            }
+
+            animationFrameId = requestAnimationFrame(animationLoop);
+        }
+
+        function lerpAngle(start, end, t) {
+            let diff = end - start;
+            if (diff > 180) diff -= 360;
+            if (diff < -180) diff += 360;
+            return start + diff * t;
+        }
+
+        function finishAnimation() {
+            isPlaying = false;
+            updateMainButton('replay');
+            showStatus("Arrived!", "green");
+        }
+
+        function stopAnimation() {
+            isPlaying = false;
+            if(animationFrameId) cancelAnimationFrame(animationFrameId);
+        }
+
+        // --- 5. RENDER ENGINE (Fixed Frame Logic) ---
+        async function startRendering() {
+            if (!hasRoute) return showStatus("Plan a route first.", "red");
+            
+            // Check for WebCodecs support
+            if (!window.VideoEncoder) return showStatus("Browser not supported (Use Chrome/Edge)", "red");
+
+            // FIX: Check if WebMMuxer loaded
+            if (typeof WebMMuxer === 'undefined') {
+                return showStatus("Video library failed to load. Check connection.", "red");
+            }
+
+            document.getElementById('render-overlay').classList.remove('hidden');
+            document.body.classList.add('cinematic-mode');
+            resetAnimationState();
+
+            renderCanvas = document.getElementById('render-canvas');
+            const mapContainer = document.getElementById('map');
+            const { width, height } = mapContainer.getBoundingClientRect();
+            
+            // Ensure even dimensions for codecs
+            renderCanvas.width = width % 2 === 0 ? width : width - 1;
+            renderCanvas.height = height % 2 === 0 ? height : height - 1;
+            
+            const totalSecs = parseInt(document.getElementById('duration-input').value) || 30;
+            const fps = 30;
+            const totalFrames = totalSecs * fps;
+            
+            // Initialize Muxer
+            muxer = new WebMMuxer.Muxer({
+                target: new WebMMuxer.ArrayBufferTarget(),
+                video: {
+                    codec: 'V_VP9',
+                    width: renderCanvas.width,
+                    height: renderCanvas.height,
+                    frameRate: fps
+                }
+            });
+
+            // Initialize Encoder
+            videoEncoder = new VideoEncoder({
+                output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+                error: (e) => { console.error(e); cancelRendering(); }
+            });
+
+            videoEncoder.configure({
+                codec: 'vp09.00.10.08',
+                width: renderCanvas.width,
+                height: renderCanvas.height,
+                bitrate: 5_000_000, // 5 Mbps
+                framerate: fps
+            });
+
+            isRendering = true;
+            let frame = 0;
+
+            const processFrame = async () => {
+                if (!isRendering) return;
+
+                // Physics step (Manual, not time-based)
+                const speedMs = totalDistance / totalSecs;
+                let moveDistance = speedMs * (1/fps);
+                let finalPos = null;
+
+                while (moveDistance > 0 && animState.index < pathData.length - 1) {
+                    const p1 = pathData[animState.index];
+                    const p2 = pathData[animState.index + 1];
+                    const segmentLength = map.distance(p1, p2);
+                    
+                    if(segmentLength < 0.05) { animState.index++; continue; }
+                    
+                    const remaining = segmentLength - animState.metersOnSegment;
+                    if(moveDistance <= remaining) {
+                        animState.metersOnSegment += moveDistance;
+                        animState.accumulatedDistance += moveDistance;
+                        moveDistance = 0;
+                        const ratio = animState.metersOnSegment / segmentLength;
+                        finalPos = L.latLng(p1.lat + (p2.lat - p1.lat) * ratio, p1.lng + (p2.lng - p1.lng) * ratio);
+                        animState.currentRotation = calculateBearing(p1.lat, p1.lng, p2.lat, p2.lng);
+                    } else {
+                        moveDistance -= remaining;
+                        animState.accumulatedDistance += remaining;
+                        animState.metersOnSegment = 0;
+                        animState.index++;
+                    }
+                }
+
+                if(finalPos) {
+                    carMarker.setLatLng(finalPos);
+                    const drivenPoints = pathData.slice(0, animState.index + 1);
+                    drivenPoints.push(finalPos);
+                    if(drivenPolyline) drivenPolyline.setLatLngs(drivenPoints);
+                    
+                    let currentLegIndex = 0;
+                    for(let i=0; i<legBoundaries.length; i++) {
+                        if (animState.accumulatedDistance <= legBoundaries[i]) { currentLegIndex = i; break; }
+                        if (i === legBoundaries.length - 1) currentLegIndex = i;
+                    }
+                    let legVehicle = selectedVehicle;
+                    if (currentLegIndex > 0 && intermediateWaypoints[currentLegIndex - 1]) legVehicle = intermediateWaypoints[currentLegIndex - 1].vehicle || selectedVehicle;
+                    if (carMarker._currentVehicle !== legVehicle) { updateCarIcon(legVehicle); carMarker._currentVehicle = legVehicle; }
+                    
+                    const el = carMarker.getElement();
+                    if (el) el.querySelector('.car-inner').style.transform = `rotate(${animState.currentRotation}deg)`;
+                    map.panTo(finalPos, {animate: false});
+                }
+
+                // Snap Frame
+                try {
+                    const canvas = await html2canvas(document.body, {
+                        useCORS: true, allowTaint: false, backgroundColor: null,
+                        ignoreElements: (element) => element.id === 'ui-container' || element.id === 'render-overlay'
+                    });
+                    const ctx = renderCanvas.getContext('2d');
+                    ctx.drawImage(canvas, 0, 0, renderCanvas.width, renderCanvas.height);
+                    
+                    // Encode Frame
+                    const videoFrame = new VideoFrame(renderCanvas, { timestamp: frame * 1000000 / fps });
+                    videoEncoder.encode(videoFrame, { keyFrame: frame % (fps * 2) === 0 });
+                    videoFrame.close();
+                    
+                    frame++;
+                    const pct = Math.round((frame / totalFrames) * 100);
+                    document.getElementById('render-bar').style.width = `${pct}%`;
+                    document.getElementById('render-pct').innerText = `${pct}%`;
+
+                    if(frame < totalFrames && animState.index < pathData.length - 1) {
+                        requestAnimationFrame(processFrame);
+                    } else {
+                        finishRendering();
+                    }
+                } catch(e) {
+                    console.error(e);
+                    cancelRendering();
+                    showStatus("Render blocked by browser security.", "red");
+                }
+            };
+            processFrame();
+        }
+
+        async function finishRendering() {
+            isRendering = false;
+            await videoEncoder.flush();
+            muxer.finalize();
+            
+            const buffer = muxer.target.buffer;
+            currentRecordingBlob = new Blob([buffer], { type: 'video/webm' });
+            
+            const url = URL.createObjectURL(currentRecordingBlob);
+            document.getElementById('preview-video').src = url;
+            document.getElementById('render-overlay').classList.add('hidden');
+            document.body.classList.remove('cinematic-mode');
+            document.getElementById('preview-modal').classList.remove('hidden');
+        }
+
+        function cancelRendering() {
+            isRendering = false;
+            if(mediaRecorder) mediaRecorder.stop();
+            document.getElementById('render-overlay').classList.add('hidden');
+            document.body.classList.remove('cinematic-mode');
+            resetMap(); // Reset to clean state
+        }
+
+        function downloadRecording() {
+            if(!currentRecordingBlob) return;
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = URL.createObjectURL(currentRecordingBlob);
+            a.download = `route-animation-${Date.now()}.webm`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(a.href);
+            showStatus("Video saved!", "green");
+        }
+
+        function toggleExportMenu() {
+            const menu = document.getElementById('export-menu');
+            menu.classList.toggle('hidden');
+            menu.classList.toggle('flex');
+        }
+
+        function exportData(type) {
+            if (!pathData || pathData.length === 0) return showStatus("Plan a route first.", "red");
+            let content = "", mime = "text/plain", filename = `route.${type}`;
+            if(type === 'json') {
+                content = JSON.stringify({ type: "FeatureCollection", features: [{ type: "Feature", geometry: { type: "LineString", coordinates: pathData.map(p => [p.lng, p.lat]) } }] });
+                mime = "application/json";
+            }
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([content], {type: mime}));
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            toggleExportMenu();
+        }
+
+        // --- 6. UI Helpers ---
+        function updateMainButton(state) {
+            const btn = document.getElementById('main-btn');
+            const icon = document.getElementById('btn-icon');
+            const text = document.getElementById('btn-text');
+            const loader = document.getElementById('btn-loader');
+            loader.classList.add('hidden');
+            icon.classList.remove('hidden');
+
+            if (state === 'plan') { icon.innerHTML = '<i class="ph ph-path text-xl"></i>'; text.innerText = "Plan Route"; btn.className = "w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl shadow-lg flex justify-center items-center gap-2"; }
+            else if (state === 'start') { icon.innerHTML = '<i class="ph ph-play-circle text-xl"></i>'; text.innerText = "Start Journey"; btn.className = "w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl shadow-lg flex justify-center items-center gap-2"; }
+            else if (state === 'pause') { icon.innerHTML = '<i class="ph ph-pause-circle text-xl"></i>'; text.innerText = "Pause"; btn.className = "w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold py-3 rounded-xl shadow-lg flex justify-center items-center gap-2"; }
+            else if (state === 'resume') { icon.innerHTML = '<i class="ph ph-play-circle text-xl"></i>'; text.innerText = "Resume"; btn.className = "w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-xl shadow-lg flex justify-center items-center gap-2"; }
+            else if (state === 'replay') { icon.innerHTML = '<i class="ph ph-arrow-counter-clockwise text-xl"></i>'; text.innerText = "Replay"; btn.className = "w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-xl shadow-lg flex justify-center items-center gap-2"; 
+                resetAnimationState();
+                hasRoute = true;
+            }
+        }
+
+        function setLoading(isLoading) {
+            const icon = document.getElementById('btn-icon');
+            const loader = document.getElementById('btn-loader');
+            if(isLoading) { icon.classList.add('hidden'); loader.classList.remove('hidden'); }
+            else { icon.classList.remove('hidden'); loader.classList.add('hidden'); }
+        }
+
+        async function geocode(type) {
+            const val = document.getElementById(type === 'start' ? 'start-input' : 'end-input').value;
+            if(!val) return;
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(val)}&limit=1`);
+            const data = await res.json();
+            if(data && data[0]) {
+                const ll = L.latLng(data[0].lat, data[0].lon);
+                if(type === 'start') setStartPoint(ll); else setEndPoint(ll);
+            }
+        }
+
+        function selectVehicle(type) {
+            selectedVehicle = type;
+            document.querySelectorAll('.vehicle-btn').forEach(btn => {
+                btn.className = 'vehicle-btn flex flex-col items-center gap-1 p-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-all cursor-pointer';
+                btn.querySelector('span').className = 'text-[10px] font-medium text-gray-600';
+                btn.querySelector('i').className = `text-xl text-gray-600 ph ph-${vehicleIconMap[btn.id.split('-')[1]]}`;
+            });
+            const active = document.getElementById(`btn-${type}`);
+            active.className = 'vehicle-btn active-vehicle flex flex-col items-center gap-1 p-2 rounded-xl border border-blue-500 bg-blue-50 transition-all cursor-pointer';
+            active.querySelector('span').className = 'text-[10px] font-medium text-blue-700';
+            active.querySelector('i').classList.add('text-blue-600');
+            if(carMarker && animState.accumulatedDistance < 10) { updateCarIcon(type); carMarker._currentVehicle = type; }
+        }
+
+        function showStatus(msg, color) {
+            const el = document.getElementById('status-msg');
+            el.innerText = msg;
+            let theme = { bg: 'bg-blue-50', txt: 'text-blue-700', brd: 'border-blue-200' };
+            if(color === 'red') theme = { bg: 'bg-red-50', txt: 'text-red-700', brd: 'border-red-200' };
+            if(color === 'green') theme = { bg: 'bg-green-50', txt: 'text-green-700', brd: 'border-green-200' };
+            el.className = `status-show p-3 text-xs font-medium rounded-lg border block mt-2 ${theme.bg} ${theme.txt} ${theme.brd}`;
+        }
+
+        function hideStatus() { document.getElementById('status-msg').classList.add('hidden'); }
+        function locateUser() { map.locate({setView: true, maxZoom: 16}); map.once('locationfound', (e) => { setStartPoint(e.latlng); }); }
+        function calculateBearing(lat1, lng1, lat2, lng2) {
+            const dLon = (lng2 - lng1) * Math.PI / 180;
+            const lat1Rad = lat1 * Math.PI / 180;
+            const lat2Rad = lat2 * Math.PI / 180;
+            const y = Math.sin(dLon) * Math.cos(lat2Rad);
+            const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+            return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+        }
+        function simulateUpload() {
+            document.getElementById('action-grid').classList.add('hidden');
+            setTimeout(() => { 
+                document.getElementById('upload-success').classList.remove('hidden');
+                setTimeout(() => { closePreview(); showStatus("Shared!", "green"); }, 2000);
+            }, 1000);
+        }
+        function closePreview() {
+            document.getElementById('preview-modal').classList.add('hidden');
+            document.getElementById('preview-video').src = "";
+            document.getElementById('action-grid').classList.remove('hidden');
+            document.getElementById('upload-success').classList.add('hidden');
+        }
+        function resetAnimationState() {
+            stopAnimation();
+            animState = { index: 0, metersOnSegment: 0, lastTime: 0, currentRotation: 0, accumulatedDistance: 0 };
+            if(drivenPolyline) drivenPolyline.setLatLngs([]);
+            updateCarIcon(selectedVehicle);
+            if(carMarker) carMarker._currentVehicle = selectedVehicle;
+            if(pathData.length > 0) { carMarker.setLatLng(pathData[0]); map.fitBounds(routePolyline.getBounds()); }
+        }
+
+        window.onload = initMap;
+    </script>
+</body>
+</html>
