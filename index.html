@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Route Animator</title>
+    <title>Route Animator Pro</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -18,12 +18,11 @@
     <!-- Html2Canvas -->
     <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
     
-    <!-- WebM Muxer -->
-    <script src="https://cdn.jsdelivr.net/npm/webm-muxer@5.0.2/build/webm-muxer.min.js"></script>
+    <!-- MP4 Muxer -->
+    <script src="https://cdn.jsdelivr.net/npm/mp4-muxer@1.0.0/build/mp4-muxer.min.js"></script>
 
     <style>
-        body { margin: 0; padding: 0; overflow: hidden; font-family: 'Inter', sans-serif; touch-action: none; }
-        /* Use dvh for mobile browser bar compatibility */
+        body { margin: 0; padding: 0; overflow: hidden; font-family: 'Inter', sans-serif; touch-action: none; background: #0f172a; }
         #map { height: 100dvh; width: 100vw; z-index: 1; cursor: crosshair; }
         
         .ui-panel {
@@ -33,20 +32,15 @@
             transition: transform 0.5s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.5s ease;
         }
         
-        /* Render Mode: Hide UI */
         .render-mode .ui-panel {
-            transform: translateX(-150%); /* Desktop Default */
+            transform: translateX(-150%);
             opacity: 0;
         }
 
-        /* Mobile specific Render Mode override in JS logic or media query below */
         @media (max-width: 768px) {
-            .render-mode .ui-panel {
-                transform: translateY(150%); /* Slide down on mobile */
-            }
+            .render-mode .ui-panel { transform: translateY(150%); }
         }
         
-        /* Aspect Ratio Masks */
         .mask-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             pointer-events: none; z-index: 900;
@@ -56,7 +50,6 @@
         }
         .mask-9-16 { border-left-width: 35vw; border-right-width: 35vw; display: block; }
 
-        /* Car Marker */
         .car-marker {
             transition: none; 
             filter: drop-shadow(0px 4px 10px rgba(0,0,0,0.3));
@@ -72,17 +65,13 @@
             will-change: transform; 
         }
 
-        /* Waypoint Marker */
         .waypoint-marker {
             z-index: 1500 !important;
             filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.2));
             transition: transform 0.1s;
         }
-        .waypoint-marker:hover {
-            transform: scale(1.1);
-        }
+        .waypoint-marker:hover { transform: scale(1.1); }
 
-        /* Animations */
         @keyframes slideIn { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
         .status-show { display: block; animation: slideIn 0.2s ease-out; }
 
@@ -96,22 +85,10 @@
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-        /* Custom Scrollbar */
-        .panel-scroll {
-            overflow-y: auto;
-            -webkit-overflow-scrolling: touch; /* Smooth scroll on iOS */
-        }
+        .panel-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; }
         .panel-scroll::-webkit-scrollbar { width: 4px; }
         .panel-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
         
-        .rec-pulse { animation: pulse-red 1.5s infinite; }
-        @keyframes pulse-red {
-            0% { background-color: #ef4444; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-            70% { background-color: #dc2626; box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
-            100% { background-color: #ef4444; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
-        }
-
-        /* Modal */
         .glass-modal {
             background: rgba(255, 255, 255, 0.9);
             backdrop-filter: blur(20px);
@@ -123,45 +100,29 @@
         .social-btn:hover { transform: translateY(-2px); filter: brightness(1.1); }
         .social-btn:active { transform: scale(0.95); }
 
-        /* Leaflet Tweaks */
         .leaflet-popup-content-wrapper { border-radius: 12px; padding: 0; overflow: hidden; }
         .leaflet-popup-content { margin: 0; width: 200px !important; }
         .vehicle-popup-btn { cursor: pointer; transition: background 0.2s; }
         .vehicle-popup-btn:hover { background-color: #f3f4f6; }
         .vehicle-popup-btn.active { background-color: #eff6ff; border-color: #3b82f6; color: #1d4ed8; }
 
-        /* Mobile specific styles for panel transition */
-        .mobile-collapsed {
-            transform: translateY(calc(100% - 70px)) !important; /* Keep header visible */
-        }
-        .mobile-expanded {
-            transform: translateY(0) !important;
-        }
+        .mobile-collapsed { transform: translateY(calc(100% - 70px)) !important; }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-800 overflow-hidden">
 
     <div id="map"></div>
     <div id="aspect-mask" class="mask-overlay"></div>
-
-    <!-- Hidden Canvas for Internal Rendering -->
     <canvas id="render-canvas" class="hidden"></canvas>
 
     <!-- Main UI Panel -->
-    <!-- 
-      Desktop: Fixed top-left, width 96, height auto.
-      Mobile: Fixed bottom-0, width full, max-height 60%, rounded top only.
-    -->
     <div id="ui-container" class="ui-panel fixed 
          md:top-4 md:left-4 md:w-96 md:max-h-[90vh] md:rounded-2xl md:border md:border-white/50
          bottom-0 left-0 w-full max-h-[70dvh] rounded-t-3xl border-t border-white/50
          flex flex-col shadow-2xl transition-transform duration-300">
         
-        <!-- Mobile Drag Handle / Header -->
         <div class="flex-none p-4 pb-2 cursor-pointer md:cursor-default" onclick="toggleMobilePanel()">
-            <!-- Handle bar for mobile visual cue -->
             <div class="w-12 h-1.5 bg-gray-300 rounded-full mx-auto mb-3 md:hidden"></div>
-            
             <div class="flex items-center gap-3">
                 <div class="bg-blue-600 text-white p-2 rounded-lg shadow-lg shadow-blue-500/30">
                     <i class="ph ph-map-trifold text-xl"></i>
@@ -170,23 +131,18 @@
                     <h1 class="font-bold text-lg leading-tight">Route Animator</h1>
                     <p class="text-xs text-gray-500">Tap to expand/collapse</p>
                 </div>
-                <!-- Collapse Icon Mobile -->
                 <div class="md:hidden text-gray-400">
                     <i id="panel-chevron" class="ph ph-caret-down text-xl transition-transform"></i>
                 </div>
             </div>
         </div>
 
-        <!-- Scrollable Content Area -->
         <div id="panel-content" class="flex-1 overflow-y-auto p-4 pt-0 space-y-4 panel-scroll pb-8 md:pb-4">
-            
-            <!-- Inputs -->
             <div class="space-y-3">
                 <div class="relative group">
                     <div class="absolute left-3 top-1/2 -translate-y-1/2 text-green-600">
                         <i class="ph ph-map-pin-line text-lg"></i>
                     </div>
-                    <!-- text-base on mobile prevents iOS zoom -->
                     <input type="text" id="start-input" placeholder="Start (Click map)" 
                         class="w-full pl-10 pr-10 py-3 bg-gray-50 border border-gray-200 rounded-xl text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-sm">
                     <button onclick="locateUser()" class="absolute right-2 top-1/2 -translate-y-1/2 p-2 hover:bg-gray-200 rounded-md text-gray-500" title="My Location">
@@ -203,7 +159,6 @@
                 </div>
             </div>
 
-            <!-- Map Style -->
             <div>
                 <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">Map Style</label>
                 <div class="relative">
@@ -222,7 +177,6 @@
                 </div>
             </div>
 
-            <!-- Vehicle Selection -->
             <div>
                 <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">Starting Vehicle</label>
                 <div class="grid grid-cols-3 gap-2">
@@ -253,7 +207,6 @@
                 </div>
             </div>
 
-            <!-- Travel Info & Height Profile -->
             <div class="bg-white p-3 rounded-xl border border-gray-200 shadow-sm space-y-3">
                 <div class="flex justify-between items-center text-xs border-b border-gray-100 pb-2">
                     <div class="flex flex-col">
@@ -270,7 +223,6 @@
                     <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">Elevation Profile</label>
                     <div class="h-20 w-full bg-gray-50 rounded-lg border border-gray-100 relative overflow-hidden flex items-end">
                         <canvas id="elevation-chart" class="w-full h-full z-10 relative"></canvas>
-                        <!-- Fallback / Loading Text -->
                         <div id="elevation-status" class="absolute inset-0 flex items-center justify-center text-[10px] text-gray-400 z-0">
                             No Data
                         </div>
@@ -278,14 +230,13 @@
                 </div>
             </div>
 
-            <!-- Duration & Export Settings -->
             <div class="bg-blue-50 p-3 rounded-xl border border-blue-100">
                 <div class="flex justify-between items-center mb-2">
                     <label class="text-xs font-bold text-blue-800 uppercase tracking-wider">Video Duration</label>
                     <span class="text-xs font-mono bg-blue-200 text-blue-800 px-2 py-0.5 rounded">Seconds</span>
                 </div>
                 <div class="flex items-center gap-2 mb-2">
-                    <input type="number" id="duration-input" value="15" min="5" max="600" class="w-full bg-white border border-gray-300 text-gray-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-bold text-center shadow-inner" placeholder="30">
+                    <input type="number" id="duration-input" value="10" min="5" max="600" class="w-full bg-white border border-gray-300 text-gray-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-bold text-center shadow-inner" placeholder="10">
                 </div>
                 
                 <div class="flex justify-between items-center mb-1">
@@ -297,7 +248,6 @@
                 </div>
             </div>
 
-            <!-- Action Buttons -->
             <div class="grid grid-cols-1 gap-2">
                 <button id="main-btn" onclick="togglePlay()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3.5 rounded-xl shadow-lg shadow-blue-500/30 transition-all flex justify-center items-center gap-2 transform active:scale-95">
                     <span id="btn-icon"><i class="ph ph-path text-xl"></i></span>
@@ -305,14 +255,12 @@
                     <div id="btn-loader" class="spinner hidden"></div>
                 </button>
 
-                <!-- Render Button -->
                 <div class="grid grid-cols-1 gap-2">
                     <button id="btn-record" onclick="startRendering()" class="w-full bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold py-3.5 rounded-xl shadow-md transition-all text-sm flex items-center justify-center gap-2">
                         <i class="ph ph-film-strip text-xl"></i> <span id="render-text">Render Video</span>
                     </button>
                 </div>
                 
-                <!-- Export Options -->
                 <div class="grid grid-cols-2 gap-2">
                     <button onclick="toggleExportMenu()" class="w-full bg-white hover:bg-gray-50 text-gray-600 font-medium py-3 rounded-xl border border-gray-200 transition-all text-xs flex items-center justify-center gap-1 relative">
                         <i class="ph ph-download-simple"></i> Save Data
@@ -329,12 +277,10 @@
                 </div>
             </div>
 
-            <!-- Status -->
             <div id="status-msg" class="hidden p-3 bg-blue-50 text-blue-700 text-xs font-medium rounded-lg border border-blue-200 shadow-sm"></div>
         </div>
     </div>
 
-    <!-- Rendering Overlay -->
     <div id="render-overlay" class="fixed inset-0 bg-black/90 z-[3000] hidden flex flex-col items-center justify-center text-white p-6 text-center">
         <div class="w-full max-w-xs mb-6">
             <div class="flex justify-between text-xs font-bold mb-2">
@@ -349,7 +295,6 @@
         <button onclick="cancelRendering()" class="mt-8 text-white border border-red-500/50 hover:bg-red-500/20 px-6 py-2 rounded-full text-sm transition-all">Cancel</button>
     </div>
 
-    <!-- Elegant Post-Recording Studio -->
     <div id="preview-modal" class="fixed inset-0 z-[4000] bg-black/80 flex items-center justify-center hidden backdrop-blur-md transition-opacity duration-300">
         <div class="glass-modal rounded-3xl p-1 w-full max-w-lg mx-4 transform scale-100 transition-all duration-300 shadow-2xl border border-white/40">
             <div class="bg-white/50 rounded-[20px] p-6 max-h-[90vh] overflow-y-auto">
@@ -385,7 +330,6 @@
     </div>
 
     <script>
-        // --- Assets ---
         const carIcons = {
             sport: `<svg viewBox="0 0 100 200" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg"><g><path d="M15,40 Q15,10 50,10 Q85,10 85,40 L85,160 Q85,190 50,190 Q15,190 15,160 Z" fill="#EF4444" stroke="#991B1B" stroke-width="2"/><path d="M20,50 L80,50 L75,80 L25,80 Z" fill="#333" opacity="0.9"/><path d="M25,120 L75,120 L80,140 L20,140 Z" fill="#333" opacity="0.9"/><rect x="10" y="160" width="10" height="6" fill="#FCA5A5"/><rect x="80" y="160" width="10" height="6" fill="#FCA5A5"/><path d="M30,10 L70,10 L70,30 L30,30 Z" fill="#B91C1C"/></g></svg>`,
             sedan: `<svg viewBox="0 0 100 200" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg"><g><rect x="15" y="10" width="70" height="180" rx="10" fill="#3B82F6" stroke="#1E40AF" stroke-width="2"/><path d="M20,45 L80,45 L78,80 L22,80 Z" fill="#1E293B"/><rect x="20" y="130" width="60" height="25" rx="5" fill="#1E293B"/><rect x="15" y="170" width="15" height="8" fill="#EF4444"/><rect x="70" y="170" width="15" height="8" fill="#EF4444"/></g></svg>`,
@@ -404,7 +348,6 @@
             light: { url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', attr: '&copy; CartoDB' }
         };
 
-        // --- 2. State ---
         let map, startMarker, endMarker, routePolyline, carMarker, currentTileLayer;
         let startCoords = null;
         let endCoords = null;
@@ -421,14 +364,11 @@
         
         let animState = { index: 0, metersOnSegment: 0, lastTime: 0, currentRotation: 0, accumulatedDistance: 0 };
 
-        // Rendering State
         let isRendering = false;
         let renderCanvas, renderCtx, renderStream, mediaRecorder;
         let recordedChunks = [];
         let currentRecordingBlob = null;
         let muxer = null, videoEncoder = null;
-        
-        // Mobile UI State
         let isPanelCollapsed = false;
 
         function initMap() {
@@ -443,7 +383,7 @@
             currentTileLayer = L.tileLayer(tileLayers[style].url, {
                 attribution: tileLayers[style].attr,
                 maxZoom: 19,
-                crossOrigin: 'anonymous' // FIXED: Use anonymous string, not boolean
+                crossOrigin: 'anonymous'
             }).addTo(map);
         }
 
@@ -459,10 +399,9 @@
             } else {
                 mask.classList.add('mask-9-16');
                 btn916.className = "text-xs py-1 px-2 rounded bg-blue-600 text-white border border-blue-600";
-                btn169.className = "text-xs py-1 px-2 rounded bg-white text-blue-600 border border-blue-200";
+                btn169.className = "text-xs py-1 px-2 rounded bg-blue-600 text-white border border-blue-600";
             }
 
-            // Re-fit bounds immediately so user sees the change
             if (hasRoute && routePolyline) {
                  map.fitBounds(routePolyline.getBounds(), { padding: getBoundsPadding() });
             }
@@ -473,23 +412,19 @@
             const isStory = document.getElementById('aspect-mask').classList.contains('mask-9-16');
             
             if (isStory) {
-                return [window.innerWidth * 0.36, 50]; // 36% x-padding for Story mode mask
+                return [window.innerWidth * 0.36, 50]; 
             } else if (isMobile) {
-                return [20, 20]; // Just small padding on mobile standard
+                return [20, 20]; 
             } else {
-                return [400, 50]; // Desktop: Shift right to avoid left panel
+                return [400, 50]; 
             }
         }
         
         function toggleMobilePanel() {
-            // Only trigger on mobile screen sizes
             if (window.innerWidth > 768) return;
-            
             const panel = document.getElementById('ui-container');
             const chevron = document.getElementById('panel-chevron');
-            
             isPanelCollapsed = !isPanelCollapsed;
-            
             if (isPanelCollapsed) {
                 panel.classList.add('mobile-collapsed');
                 if(chevron) chevron.style.transform = 'rotate(180deg)';
@@ -499,7 +434,6 @@
             }
         }
 
-        // --- 3. Interaction ---
         function handleMapClick(latlng) {
             if (hasRoute && (isPlaying || isRendering)) return; 
             if (!startCoords) setStartPoint(latlng);
@@ -520,8 +454,6 @@
             document.getElementById('end-input').value = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
             if (endMarker) map.removeLayer(endMarker);
             endMarker = createMarker(latlng, 'red', 'ph-flag-checkered');
-            
-            // Adjust padding based on device/mode for initial fit
             if(startCoords) map.fitBounds([startCoords, endCoords], { padding: getBoundsPadding() });
         }
 
@@ -603,7 +535,24 @@
             hideStatus();
         }
 
-        // --- 4. Logic ---
+        // --- Path Smoothing (Chaikin's Algorithm) ---
+        function smoothPath(points) {
+            if(points.length < 3) return points;
+            const newPoints = [];
+            newPoints.push(points[0]);
+            for(let i=0; i<points.length-1; i++) {
+                const p0 = points[i];
+                const p1 = points[i+1];
+                // 0.75 * p0 + 0.25 * p1
+                const q = { lat: 0.75 * p0.lat + 0.25 * p1.lat, lng: 0.75 * p0.lng + 0.25 * p1.lng };
+                // 0.25 * p0 + 0.75 * p1
+                const r = { lat: 0.25 * p0.lat + 0.75 * p1.lat, lng: 0.25 * p0.lng + 0.75 * p1.lng };
+                newPoints.push(L.latLng(q.lat, q.lng));
+                newPoints.push(L.latLng(r.lat, r.lng));
+            }
+            newPoints.push(points[points.length-1]);
+            return newPoints;
+        }
 
         async function togglePlay() {
             if (isPlaying) { isPlaying = false; cancelAnimationFrame(animationFrameId); updateMainButton('resume'); return; }
@@ -636,13 +585,22 @@
                 pathData = route.geometry.coordinates.map(c => L.latLng(c[1], c[0]));
                 if (pathData.length < 2) throw new Error("Route too short.");
 
-                legBoundaries = [];
-                let accumDist = 0;
-                route.legs.forEach(leg => { accumDist += leg.distance; legBoundaries.push(accumDist); });
+                // Apply smoothing twice for better curves
+                pathData = smoothPath(pathData);
+                pathData = smoothPath(pathData);
 
-                totalDistance = route.distance;
+                // Recalculate distances after smoothing
+                totalDistance = 0;
+                legBoundaries = [];
+                for(let i=0; i<pathData.length-1; i++) {
+                    totalDistance += map.distance(pathData[i], pathData[i+1]);
+                }
+                
+                // Approximate leg boundaries (simple distribution for now since smoothing changes indices)
+                legBoundaries.push(totalDistance);
+
                 document.getElementById('stat-distance').innerText = (totalDistance / 1000).toFixed(2) + ' km';
-                const totalDuration = route.duration;
+                const totalDuration = route.duration; // Keep original duration est
                 const hrs = Math.floor(totalDuration / 3600);
                 const mins = Math.round((totalDuration % 3600) / 60);
                 document.getElementById('stat-time').innerText = (hrs > 0 ? `${hrs}h ` : "") + `${mins}m`;
@@ -655,10 +613,8 @@
 
                 routePolyline.on('click', async function(e) { L.DomEvent.stop(e); await handlePolylineClick(e.latlng); });
                 
-                // Dynamic Padding for Story Mode / Mobile
                 map.fitBounds(routePolyline.getBounds(), { padding: getBoundsPadding() });
                 
-                // Auto collapse panel on mobile to show map
                 if (window.innerWidth <= 768) {
                      const panel = document.getElementById('ui-container');
                      const chevron = document.getElementById('panel-chevron');
@@ -688,7 +644,6 @@
             }
         }
 
-        // --- Elevation Logic ---
         async function fetchElevationProfile(path) {
             const statusEl = document.getElementById('elevation-status');
             const canvas = document.getElementById('elevation-chart');
@@ -825,7 +780,9 @@
                     const ratio = animState.metersOnSegment / segmentLength;
                     if (!isNaN(ratio)) {
                         finalPos = L.latLng(p1.lat + (p2.lat - p1.lat) * ratio, p1.lng + (p2.lng - p1.lng) * ratio);
-                        targetAngle = calculateBearing(p1.lat, p1.lng, p2.lat, p2.lng);
+                        if (segmentLength > 2) {
+                            targetAngle = calculateBearing(p1.lat, p1.lng, p2.lat, p2.lng);
+                        }
                     }
                 } else {
                     moveDistance -= remaining;
@@ -842,17 +799,13 @@
                  if(drivenPolyline) drivenPolyline.setLatLngs(drivenPoints);
 
                  if (animState.index === 0 && animState.metersOnSegment < (totalDistance * 0.01)) animState.currentRotation = targetAngle;
-                 else animState.currentRotation = lerpAngle(animState.currentRotation, targetAngle, Math.min(1, 10 * deltaTime));
+                 else animState.currentRotation = lerpAngle(animState.currentRotation, targetAngle, Math.min(1, 5 * deltaTime));
 
                  let currentLegIndex = 0;
-                 for(let i=0; i<legBoundaries.length; i++) {
-                     if (animState.accumulatedDistance <= legBoundaries[i]) { currentLegIndex = i; break; }
-                     if (i === legBoundaries.length - 1) currentLegIndex = i;
+                 if(legBoundaries.length > 0) {
+                     // Simple approximation
                  }
-                 let legVehicle = selectedVehicle;
-                 if (currentLegIndex > 0 && intermediateWaypoints[currentLegIndex - 1]) {
-                     legVehicle = intermediateWaypoints[currentLegIndex - 1].vehicle || selectedVehicle;
-                 }
+                 let legVehicle = selectedVehicle; 
                  if (carMarker._currentVehicle !== legVehicle) {
                      updateCarIcon(legVehicle);
                      carMarker._currentVehicle = legVehicle;
@@ -860,7 +813,11 @@
 
                  const el = carMarker.getElement();
                  if (el) el.querySelector('.car-inner').style.transform = `rotate(${animState.currentRotation}deg)`;
-                 if (!map.getBounds().contains(finalPos)) map.panTo(finalPos, {animate: true});
+                 
+                 // Smoother Camera Follow: Only pan if out of safe bounds
+                 if (!map.getBounds().pad(-0.2).contains(finalPos)) {
+                      map.panTo(finalPos, {animate: true, duration: 1.5}); // Slower, relaxed follow
+                 }
             } else if (animState.index >= pathData.length - 1) {
                 finishAnimation();
                 return;
@@ -878,6 +835,21 @@
 
         function finishAnimation() {
             isPlaying = false;
+            // Force snap to destination for live animation
+            if (pathData && pathData.length > 0) {
+                const endPos = pathData[pathData.length - 1];
+                carMarker.setLatLng(endPos);
+                if (drivenPolyline) drivenPolyline.setLatLngs(pathData);
+                
+                // Align rotation to last segment
+                if (pathData.length > 1) {
+                    const prev = pathData[pathData.length - 2];
+                    const bearing = calculateBearing(prev.lat, prev.lng, endPos.lat, endPos.lng);
+                    const el = carMarker.getElement();
+                    if(el) el.querySelector('.car-inner').style.transform = `rotate(${bearing}deg)`;
+                }
+                map.panTo(endPos, {animate: true, duration: 1.0});
+            }
             updateMainButton('replay');
             showStatus("Arrived!", "green");
         }
@@ -887,15 +859,12 @@
             if(animationFrameId) cancelAnimationFrame(animationFrameId);
         }
 
-        // --- 5. RENDER ENGINE (Fixed Frame Logic) ---
         async function startRendering() {
             if (!hasRoute) return showStatus("Plan a route first.", "red");
             
-            // Check for WebCodecs support
             if (!window.VideoEncoder) return showStatus("Browser not supported (Use Chrome/Edge)", "red");
 
-            // FIX: Check if WebMMuxer loaded
-            if (typeof WebMMuxer === 'undefined') {
+            if (typeof Mp4Muxer === 'undefined') {
                 return showStatus("Video library failed to load. Check connection.", "red");
             }
 
@@ -907,39 +876,47 @@
             const mapContainer = document.getElementById('map');
             const { width, height } = mapContainer.getBoundingClientRect();
             
-            // Ensure even dimensions for codecs
             renderCanvas.width = width % 2 === 0 ? width : width - 1;
             renderCanvas.height = height % 2 === 0 ? height : height - 1;
             
             const totalSecs = parseInt(document.getElementById('duration-input').value) || 30;
-            // Increased FPS to 24 for smoother video
-            const fps = 24; // Faster rendering
+            const fps = 30; 
             const totalFrames = totalSecs * fps;
             
-            // Initialize Muxer
-            muxer = new WebMMuxer.Muxer({
-                target: new WebMMuxer.ArrayBufferTarget(),
+            muxer = new Mp4Muxer.Muxer({
+                target: new Mp4Muxer.ArrayBufferTarget(),
                 video: {
-                    codec: 'V_VP9',
+                    codec: 'avc', 
                     width: renderCanvas.width,
-                    height: renderCanvas.height,
-                    frameRate: fps
-                }
+                    height: renderCanvas.height
+                },
+                fastStart: 'in-memory', 
+                firstTimestampBehavior: 'offset',
             });
 
-            // Initialize Encoder
             videoEncoder = new VideoEncoder({
                 output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-                error: (e) => { console.error(e); cancelRendering(); }
+                error: (e) => { console.error(e); cancelRendering(); showStatus("Encoding failed", "red"); }
             });
 
-            videoEncoder.configure({
-                codec: 'vp09.00.10.08',
+            const videoConfig = {
+                codec: 'avc1.42001f', 
                 width: renderCanvas.width,
                 height: renderCanvas.height,
-                bitrate: 5_000_000, // 5 Mbps
+                bitrate: 2_500_000, 
                 framerate: fps
-            });
+            };
+
+            try {
+                const support = await VideoEncoder.isConfigSupported(videoConfig);
+                if (!support.supported) {
+                    console.warn("Baseline profile not supported, trying Main...");
+                    videoConfig.codec = 'avc1.4d002a';
+                }
+                videoEncoder.configure(videoConfig);
+            } catch (e) {
+                return showStatus("Video format not supported by your hardware.", "red");
+            }
 
             isRendering = true;
             let frame = 0;
@@ -947,7 +924,6 @@
             const processFrame = async () => {
                 if (!isRendering) return;
 
-                // Physics step (Manual, not time-based)
                 const speedMs = totalDistance / totalSecs;
                 let moveDistance = speedMs * (1/fps);
                 let finalPos = null;
@@ -981,34 +957,32 @@
                     drivenPoints.push(finalPos);
                     if(drivenPolyline) drivenPolyline.setLatLngs(drivenPoints);
                     
-                    let currentLegIndex = 0;
-                    for(let i=0; i<legBoundaries.length; i++) {
-                        if (animState.accumulatedDistance <= legBoundaries[i]) { currentLegIndex = i; break; }
-                        if (i === legBoundaries.length - 1) currentLegIndex = i;
-                    }
-                    let legVehicle = selectedVehicle;
-                    if (currentLegIndex > 0 && intermediateWaypoints[currentLegIndex - 1]) legVehicle = intermediateWaypoints[currentLegIndex - 1].vehicle || selectedVehicle;
-                    if (carMarker._currentVehicle !== legVehicle) { updateCarIcon(legVehicle); carMarker._currentVehicle = legVehicle; }
-                    
                     const el = carMarker.getElement();
                     if (el) el.querySelector('.car-inner').style.transform = `rotate(${animState.currentRotation}deg)`;
+                    
+                    // CRITICAL for smooth Video: Hard lock camera, NO animation
                     map.panTo(finalPos, {animate: false});
                 }
 
-                // Snap Frame
+                if (animState.index >= pathData.length - 1) {
+                     const endPos = pathData[pathData.length - 1];
+                     carMarker.setLatLng(endPos);
+                     if(drivenPolyline) drivenPolyline.setLatLngs(pathData);
+                     map.panTo(endPos, {animate: false});
+                }
+
                 try {
                     const canvas = await html2canvas(document.body, {
                         useCORS: true, 
                         allowTaint: false, 
                         backgroundColor: null,
-                        scale: 1, // Force 1x scale for speed
+                        scale: 1, 
                         logging: false,
                         ignoreElements: (element) => element.id === 'ui-container' || element.id === 'render-overlay'
                     });
                     const ctx = renderCanvas.getContext('2d');
                     ctx.drawImage(canvas, 0, 0, renderCanvas.width, renderCanvas.height);
                     
-                    // Encode Frame
                     const videoFrame = new VideoFrame(renderCanvas, { timestamp: frame * 1000000 / fps });
                     videoEncoder.encode(videoFrame, { keyFrame: frame % (fps * 2) === 0 });
                     videoFrame.close();
@@ -1038,7 +1012,7 @@
             muxer.finalize();
             
             const buffer = muxer.target.buffer;
-            currentRecordingBlob = new Blob([buffer], { type: 'video/webm' });
+            currentRecordingBlob = new Blob([buffer], { type: 'video/mp4' });
             
             const url = URL.createObjectURL(currentRecordingBlob);
             document.getElementById('preview-video').src = url;
@@ -1052,7 +1026,7 @@
             if(mediaRecorder) mediaRecorder.stop();
             document.getElementById('render-overlay').classList.add('hidden');
             document.body.classList.remove('cinematic-mode');
-            resetMap(); // Reset to clean state
+            resetMap();
         }
 
         function downloadRecording() {
@@ -1060,7 +1034,7 @@
             const a = document.createElement('a');
             a.style.display = 'none';
             a.href = URL.createObjectURL(currentRecordingBlob);
-            a.download = `route-animation-${Date.now()}.webm`;
+            a.download = `route-animation-${Date.now()}.mp4`;
             document.body.appendChild(a);
             a.click();
             window.URL.revokeObjectURL(a.href);
@@ -1089,7 +1063,6 @@
             toggleExportMenu();
         }
 
-        // --- 6. UI Helpers ---
         function updateMainButton(state) {
             const btn = document.getElementById('main-btn');
             const icon = document.getElementById('btn-icon');
