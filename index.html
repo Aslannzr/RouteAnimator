@@ -657,6 +657,11 @@
         async function togglePlay() {
             if (isPlaying) { isPlaying = false; cancelAnimationFrame(animationFrameId); updateMainButton('resume'); return; }
             if (hasRoute && pathData.length > 0) {
+                // If animation reached the end, reset before playing again
+                if (animState.index >= pathData.length - 1) {
+                    resetAnimationState();
+                }
+
                 isPlaying = true;
                 animState.lastTime = performance.now();
                 updateMainButton('pause');
@@ -1176,8 +1181,6 @@
             else if (state === 'pause') { icon.innerHTML = '<i class="ph ph-pause-circle text-xl"></i>'; text.innerText = "Pause"; btn.className = "w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold py-3 rounded-xl shadow-lg flex justify-center items-center gap-2"; }
             else if (state === 'resume') { icon.innerHTML = '<i class="ph ph-play-circle text-xl"></i>'; text.innerText = "Resume"; btn.className = "w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-xl shadow-lg flex justify-center items-center gap-2"; }
             else if (state === 'replay') { icon.innerHTML = '<i class="ph ph-arrow-counter-clockwise text-xl"></i>'; text.innerText = "Replay"; btn.className = "w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-xl shadow-lg flex justify-center items-center gap-2"; 
-                resetAnimationState();
-                hasRoute = true;
             }
         }
 
