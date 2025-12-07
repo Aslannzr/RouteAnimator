@@ -143,19 +143,23 @@
                     <div class="absolute left-3 top-1/2 -translate-y-1/2 text-green-600">
                         <i class="ph ph-map-pin-line text-lg"></i>
                     </div>
-                    <input type="text" id="start-input" placeholder="Start (Click map)" 
+                    <input type="text" id="start-input" placeholder="Start (Type to search)" 
                         class="w-full pl-10 pr-10 py-3 bg-gray-50 border border-gray-200 rounded-xl text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-sm">
                     <button onclick="locateUser()" class="absolute right-2 top-1/2 -translate-y-1/2 p-2 hover:bg-gray-200 rounded-md text-gray-500" title="My Location">
                         <i class="ph ph-crosshair text-lg"></i>
                     </button>
+                    <!-- Suggestions List -->
+                    <ul id="start-suggestions" class="hidden absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto divide-y divide-gray-100"></ul>
                 </div>
 
                 <div class="relative">
                     <div class="absolute left-3 top-1/2 -translate-y-1/2 text-red-500">
                         <i class="ph ph-flag-checkered text-lg"></i>
                     </div>
-                    <input type="text" id="end-input" placeholder="Destination (Click map)" 
+                    <input type="text" id="end-input" placeholder="Destination (Type to search)" 
                         class="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-sm">
+                    <!-- Suggestions List -->
+                    <ul id="end-suggestions" class="hidden absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto divide-y divide-gray-100"></ul>
                 </div>
             </div>
 
@@ -376,7 +380,100 @@
             changeMapStyle('standard'); 
             L.control.zoom({ position: 'bottomright' }).addTo(map);
             map.on('click', (e) => handleMapClick(e.latlng));
+
+            // Attach listeners for live search
+            setupLiveSearch();
         }
+
+        // --- Live Search / Autocomplete Logic ---
+        function setupLiveSearch() {
+            const startInput = document.getElementById('start-input');
+            const endInput = document.getElementById('end-input');
+
+            // Debounce utility to prevent API spamming
+            const debounce = (func, wait) => {
+                let timeout;
+                return function executedFunction(...args) {
+                    const later = () => {
+                        clearTimeout(timeout);
+                        func(...args);
+                    };
+                    clearTimeout(timeout);
+                    timeout = setTimeout(later, wait);
+                };
+            };
+
+            const handleSearch = async (query, type) => {
+                const list = document.getElementById(`${type}-suggestions`);
+                if (query.length < 3) {
+                    list.classList.add('hidden');
+                    return;
+                }
+                
+                try {
+                    const results = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1`).then(res => res.json());
+                    showSuggestions(results, type);
+                } catch(e) {
+                    console.error("Search failed", e);
+                }
+            };
+
+            const debouncedSearch = debounce(handleSearch, 400);
+
+            startInput.addEventListener('input', (e) => debouncedSearch(e.target.value, 'start'));
+            endInput.addEventListener('input', (e) => debouncedSearch(e.target.value, 'end'));
+
+            // Hide suggestions when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!startInput.contains(e.target)) document.getElementById('start-suggestions').classList.add('hidden');
+                if (!endInput.contains(e.target)) document.getElementById('end-suggestions').classList.add('hidden');
+            });
+        }
+
+        function showSuggestions(results, type) {
+            const list = document.getElementById(`${type}-suggestions`);
+            list.innerHTML = '';
+            
+            if (results.length === 0) {
+                list.classList.add('hidden');
+                return;
+            }
+
+            list.classList.remove('hidden');
+            
+            results.forEach(item => {
+                const li = document.createElement('li');
+                li.className = 'px-4 py-3 hover:bg-gray-50 cursor-pointer text-sm flex flex-col gap-0.5 transition-colors';
+                
+                // Format display text
+                const mainText = item.display_name.split(',')[0];
+                const subText = item.display_name.split(',').slice(1).join(',').trim();
+                
+                li.innerHTML = `
+                    <span class="font-medium text-gray-800">${mainText}</span>
+                    <span class="text-xs text-gray-400 truncate">${subText || ''}</span>
+                `;
+                
+                li.onclick = (e) => {
+                    e.stopPropagation(); // Prevent document click handler
+                    selectSuggestion(item, type);
+                };
+                list.appendChild(li);
+            });
+        }
+
+        function selectSuggestion(item, type) {
+            const latlng = L.latLng(item.lat, item.lon);
+            const list = document.getElementById(`${type}-suggestions`);
+            list.classList.add('hidden');
+            
+            if (type === 'start') {
+                setStartPoint(latlng, item.display_name);
+            } else {
+                setEndPoint(latlng, item.display_name);
+            }
+        }
+        // ----------------------------------------
 
         function changeMapStyle(style) {
             if (currentTileLayer) map.removeLayer(currentTileLayer);
@@ -441,17 +538,18 @@
             else { resetMap(); setStartPoint(latlng); }
         }
 
-        function setStartPoint(latlng) {
+        function setStartPoint(latlng, label = null) {
             startCoords = latlng;
-            document.getElementById('start-input').value = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
+            document.getElementById('start-input').value = label || `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
             if (startMarker) map.removeLayer(startMarker);
             startMarker = createMarker(latlng, 'green', 'ph-map-pin');
             bindVehiclePopup(startMarker, 'start');
+            if(endCoords) map.fitBounds([startCoords, endCoords], { padding: getBoundsPadding() });
         }
 
-        function setEndPoint(latlng) {
+        function setEndPoint(latlng, label = null) {
             endCoords = latlng;
-            document.getElementById('end-input').value = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
+            document.getElementById('end-input').value = label || `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
             if (endMarker) map.removeLayer(endMarker);
             endMarker = createMarker(latlng, 'red', 'ph-flag-checkered');
             if(startCoords) map.fitBounds([startCoords, endCoords], { padding: getBoundsPadding() });
@@ -527,6 +625,8 @@
             startCoords = null; endCoords = null;
             document.getElementById('start-input').value = '';
             document.getElementById('end-input').value = '';
+            document.getElementById('start-suggestions').classList.add('hidden');
+            document.getElementById('end-suggestions').classList.add('hidden');
             document.getElementById('stat-distance').innerText = '-- km';
             document.getElementById('stat-time').innerText = '-- min';
             clearElevationChart();
@@ -1095,7 +1195,7 @@
             const data = await res.json();
             if(data && data[0]) {
                 const ll = L.latLng(data[0].lat, data[0].lon);
-                if(type === 'start') setStartPoint(ll); else setEndPoint(ll);
+                if(type === 'start') setStartPoint(ll, data[0].display_name); else setEndPoint(ll, data[0].display_name);
             }
         }
 
